@@ -9,7 +9,9 @@ export function getConfig() {
     scheduleId: process.env.SCHEDULE_ID,
     facilityId: process.env.FACILITY_ID,
     countryCode: process.env.COUNTRY_CODE,
-    refreshDelay: Number(process.env.REFRESH_DELAY || 3)
+    refreshDelay: Number(process.env.REFRESH_DELAY || 3),
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+    telegramChatId: process.env.TELEGRAM_CHAT_ID
   };
 
   validateConfig(config);
