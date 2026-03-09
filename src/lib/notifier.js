@@ -8,18 +8,38 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
+const MAX_RETRIES = 2;
+const MIN_SEND_INTERVAL_MS = 3000; // minimum 3s between messages
+
 export class Notifier {
   constructor(config) {
     this.botToken = config.telegramBotToken;
     this.chatId = config.telegramChatId;
+    this._lastSendTime = 0;
+    this._rateLimitedUntil = 0;
   }
 
   isEnabled() {
     return !!(this.botToken && this.chatId);
   }
 
-  async send(message) {
+  async send(message, retries = 0) {
     if (!this.isEnabled()) return;
+
+    // If we're currently rate-limited, skip non-critical messages
+    const now = Date.now();
+    if (now < this._rateLimitedUntil) {
+      const waitSec = Math.ceil((this._rateLimitedUntil - now) / 1000);
+      log(`Telegram rate-limited, ${waitSec}s remaining — skipping message`);
+      return;
+    }
+
+    // Enforce minimum interval between sends to avoid bursts
+    const elapsed = now - this._lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      const delay = MIN_SEND_INTERVAL_MS - elapsed;
+      await new Promise(r => setTimeout(r, delay));
+    }
 
     try {
       const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
@@ -33,10 +53,36 @@ export class Notifier {
         })
       });
 
-      if (!response.ok) {
-        const body = await response.text();
-        log(`Telegram notification failed (${response.status}): ${body}`);
+      this._lastSendTime = Date.now();
+
+      if (response.ok) return;
+
+      const body = await response.text();
+
+      if (response.status === 429) {
+        let retryAfter = 60; // default fallback
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed.parameters?.retry_after) {
+            retryAfter = parsed.parameters.retry_after;
+          }
+        } catch (_) {}
+
+        this._rateLimitedUntil = Date.now() + retryAfter * 1000;
+        log(`Telegram rate limit hit — retry after ${retryAfter}s`);
+
+        if (retries < MAX_RETRIES && retryAfter <= 60) {
+          // Only auto-retry for short waits (<=60s)
+          log(`Waiting ${retryAfter}s before retrying Telegram message...`);
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          return this.send(message, retries + 1);
+        }
+
+        log('Telegram retry_after too long or max retries reached — dropping message');
+        return;
       }
+
+      log(`Telegram notification failed (${response.status}): ${body}`);
     } catch (err) {
       log(`Telegram notification error: ${err.message}`);
     }

@@ -97,7 +97,7 @@ async function _runBot(bot, notifier, config, options) {
   } catch (err) {
     if (isSocketHangupError(err)) {
       log(`Socket hangup error: ${err.message}. Trying again after ${COOLDOWN} seconds...`);
-      notifier.notifyError(err.message, COOLDOWN);
+      await notifier.notifyError(err.message, COOLDOWN);
       await sleep(COOLDOWN);
     } else {
       log(`Session/authentication error: ${err.message}. Retrying immediately...`);
