@@ -3,7 +3,7 @@ import { getConfig } from '../lib/config.js';
 import { Notifier } from '../lib/notifier.js';
 import { log, sleep, isSocketHangupError } from '../lib/utils.js';
 
-const COOLDOWN = 30; 
+const COOLDOWN = 5; 
 
 export async function botCommand(options) {
   const config = getConfig();
