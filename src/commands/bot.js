@@ -3,7 +3,7 @@ import { getConfig } from '../lib/config.js';
 import { Notifier } from '../lib/notifier.js';
 import { log, sleep, isSocketHangupError } from '../lib/utils.js';
 
-const COOLDOWN = 5; 
+const BACKOFF_STEPS_SECONDS = [2, 5, 10, 20];
 
 export async function botCommand(options) {
   const config = getConfig();
@@ -22,10 +22,10 @@ export async function botCommand(options) {
     log('Telegram notifications enabled');
   }
 
-  return _runBot(bot, notifier, config, options);
+  return _runBot(bot, notifier, config, options, 0);
 }
 
-async function _runBot(bot, notifier, config, options) {
+async function _runBot(bot, notifier, config, options, failureCount = 0) {
   let currentBookedDate = options.current || null;
   const targetDate = options.target;
   const minDate = options.min;
@@ -92,17 +92,30 @@ async function _runBot(bot, notifier, config, options) {
         }
       }
 
+      failureCount = 0;
       await sleep(config.refreshDelay);
     }
   } catch (err) {
+    const nextFailureCount = failureCount + 1;
+    const cooldownSeconds = getAdaptiveCooldownSeconds(nextFailureCount);
+
     if (isSocketHangupError(err)) {
-      log(`Socket hangup error: ${err.message}. Trying again after ${COOLDOWN} seconds...`);
-      await notifier.notifyError(err.message, COOLDOWN);
-      await sleep(COOLDOWN);
+      log(`Socket hangup error: ${err.message}. Trying again after ${cooldownSeconds} seconds...`);
+      await notifier.notifyError(err.message, cooldownSeconds);
+      await sleep(cooldownSeconds);
     } else {
-      log(`Session/authentication error: ${err.message}. Retrying immediately...`);
-      await notifier.notifyError(err.message);
+      log(`Session/authentication error: ${err.message}. Trying again after ${cooldownSeconds} seconds...`);
+      await notifier.notifyError(err.message, cooldownSeconds);
+      await sleep(cooldownSeconds);
     }
-    return _runBot(bot, notifier, config, options);
+    return _runBot(bot, notifier, config, options, nextFailureCount);
   }
+}
+
+function getAdaptiveCooldownSeconds(failureCount) {
+  const index = Math.min(Math.max(failureCount - 1, 0), BACKOFF_STEPS_SECONDS.length - 1);
+  const baseCooldown = BACKOFF_STEPS_SECONDS[index];
+  const jitter = Math.floor(Math.random() * 2);
+
+  return baseCooldown + jitter;
 }
