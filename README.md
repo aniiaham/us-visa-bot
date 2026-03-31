@@ -45,9 +45,6 @@ COUNTRY_CODE=your_country_code
 SCHEDULE_ID=your_schedule_id
 FACILITY_ID=your_facility_id
 REFRESH_DELAY=3
-REQUEST_TIMEOUT_MS=12000
-TRANSIENT_RETRIES=2
-TRANSIENT_RETRY_BASE_MS=700
 ```
 
 ### Finding Your Configuration Values
@@ -60,9 +57,6 @@ TRANSIENT_RETRY_BASE_MS=700
 | `SCHEDULE_ID` | Your appointment schedule ID | Found in URL when rescheduling: <br>`https://ais.usvisa-info.com/en-{COUNTRY_CODE}/niv/schedule/{SCHEDULE_ID}/continue_actions` |
 | `FACILITY_ID` | Your consulate facility ID | Found in network calls when selecting dates, or inspect the date selector dropdown <br>Example: Paris = `44` |
 | `REFRESH_DELAY` | Seconds between checks | Optional, defaults to 3 seconds |
-| `REQUEST_TIMEOUT_MS` | HTTP timeout in milliseconds | Optional, defaults to 12000 |
-| `TRANSIENT_RETRIES` | Extra retries for transient request failures | Optional, defaults to 2 |
-| `TRANSIENT_RETRY_BASE_MS` | Base delay (ms) used for transient retry backoff | Optional, defaults to 700 |
 
 ## Usage
 
@@ -110,12 +104,6 @@ The bot will:
    - Will exit successfully if target date (`-t`) is reached
 4. **Book** the appointment automatically if conditions are met
 5. **Continue** monitoring until target is reached or manually stopped
-
-### Resilience Behavior
-
-- Transient request issues (socket hangup, timeout, DNS hiccups, 429/5xx) are retried quickly before the bot gives up on the cycle
-- Session/authentication failures trigger a re-login path with adaptive cooldown
-- The bot keeps the active session for transient outages instead of reinitializing on every blip
 
 ## Output Examples
 
