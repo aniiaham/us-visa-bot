@@ -6,7 +6,16 @@ export class Bot {
     this.config = config;
     this.dryRun = options.dryRun || false;
     this.bookedDates = new Set();
-    this.client = new VisaHttpClient(this.config.countryCode, this.config.email, this.config.password);
+    this.client = new VisaHttpClient(
+      this.config.countryCode,
+      this.config.email,
+      this.config.password,
+      {
+        requestTimeoutMs: this.config.requestTimeoutMs,
+        transientRetries: this.config.transientRetries,
+        transientRetryBaseMs: this.config.transientRetryBaseMs
+      }
+    );
   }
 
   async initialize() {
