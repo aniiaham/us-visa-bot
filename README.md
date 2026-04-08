@@ -7,7 +7,7 @@ An automated bot that monitors and reschedules US visa interview appointments to
 - 🔄 Continuously monitors available appointment slots
 - 📅 Automatically books earlier dates when found  
 - 🎯 Configurable target and minimum date constraints
-- 🚨 Exits successfully when target date is reached
+- 🚨 Exits successfully after the first booking
 - 📊 Detailed logging with timestamps
 - 🔐 Secure authentication with environment variables
 
@@ -71,7 +71,7 @@ node index.js -c <current_date> [-t <target_date>] [-m <min_date>]
 | Flag | Long Form | Required | Description |
 |------|-----------|----------|-------------|
 | `-c` | `--current` | ✅ | Your current booked interview date (YYYY-MM-DD) |
-| `-t` | `--target` | ❌ | Target date to stop at - exits successfully when reached |
+| `-t` | `--target` | ❌ | Preferred target date for notifications/logging |
 | `-m` | `--min` | ❌ | Minimum acceptable date - skips dates before this |
 
 ### Examples
@@ -80,7 +80,7 @@ node index.js -c <current_date> [-t <target_date>] [-m <min_date>]
 # Basic usage - reschedule to any earlier date
 node index.js -c 2023-06-15
 
-# With target date - stop when you get June 1st or earlier  
+# With target date preference in notifications/logging
 node index.js -c 2023-06-15 -t 2023-06-01
 
 # With minimum date - only accept dates after May 1st
@@ -101,9 +101,9 @@ The bot will:
 3. **Compare** found dates against your constraints:
    - Must be earlier than current date (`-c`)
    - Must be after minimum date (`-m`) if specified
-   - Will exit successfully if target date (`-t`) is reached
+   - Can use target date (`-t`) as a preferred threshold
 4. **Book** the appointment automatically if conditions are met
-5. **Continue** monitoring until target is reached or manually stopped
+5. **Stop** immediately after a successful booking (including `--dry-run`)
 
 ## Output Examples
 

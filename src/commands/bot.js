@@ -70,25 +70,8 @@ async function _runBot(bot, notifier, config, options, failureCount = 0) {
 
         if (result) {
           await notifier.notifyBooked(availableDate, result.time, options.dryRun);
-
-          // If no prior booking, this was a first-time book — exit
-          if (!currentBookedDate) {
-            log(`Successfully booked appointment on ${availableDate} at ${result.time}`);
-            process.exit(0);
-          }
-
-          // Update current date to the new available date
-          currentBookedDate = availableDate;
-
-          options = {
-            ...options,
-            current: currentBookedDate
-          };
-
-          if (targetDate && availableDate <= targetDate) {
-            log(`Target date reached! Successfully booked appointment on ${availableDate}`);
-            process.exit(0);
-          }
+          log(`Successfully booked appointment on ${availableDate} at ${result.time}`);
+          process.exit(0);
         }
       }
 
