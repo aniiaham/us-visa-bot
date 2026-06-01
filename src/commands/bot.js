@@ -4,8 +4,9 @@ import { Notifier } from '../lib/notifier.js';
 import { log, sleep, isSocketHangupError } from '../lib/utils.js';
 
 const BACKOFF_STEPS_SECONDS = [15, 30, 60, 90];
-const TRANSIENT_RETRY_DELAYS_SECONDS = [3, 7, 15];
-const DATE_CHECK_FAILURE_COOLDOWN_SECONDS = [30, 60, 90];
+const TRANSIENT_RETRY_DELAY_SECONDS = 5;
+const DATE_CHECK_FAILURE_COOLDOWN_SECONDS = [12, 30, 60, 90];
+const DATE_CHECK_RELOGIN_AFTER_FAILURES = 8;
 const POLL_DELAY_MULTIPLIERS = [1, 2, 3, 4];
 const POLL_STREAK_STEP = 3;
 const JITTER_FACTOR = 0.2;
@@ -76,9 +77,13 @@ async function _runBot(bot, notifier, config, options, failureCount = 0) {
 
       if (availableDate === DATE_CHECK_FAILED) {
         dateCheckFailureCount += 1;
+
+        if (dateCheckFailureCount >= DATE_CHECK_RELOGIN_AFTER_FAILURES) {
+          throw new Error(`Date checks failed ${dateCheckFailureCount} times; refreshing login session`);
+        }
+
         const cooldownSeconds = getDateCheckFailureCooldownSeconds(dateCheckFailureCount);
-        log(`Date check failed after transient retries. Keeping current session and trying again after ${cooldownSeconds} seconds...`);
-        await notifier.notifyError('Date check failed after repeated socket hangups', cooldownSeconds);
+        log(`Visa site is hanging up. Keeping current session and probing again after ${cooldownSeconds} seconds...`);
         await sleep(cooldownSeconds);
         continue;
       }
@@ -143,28 +148,26 @@ function applyJitterSeconds(baseSeconds) {
 }
 
 async function checkAvailableDateWithRetries(bot, sessionHeaders, currentBookedDate, minDate, maxDate) {
-  let lastError;
-
-  for (let attempt = 0; attempt <= TRANSIENT_RETRY_DELAYS_SECONDS.length; attempt++) {
-    try {
-      return await bot.checkAvailableDate(sessionHeaders, currentBookedDate, minDate, maxDate);
-    } catch (err) {
-      if (!isSocketHangupError(err)) {
-        throw err;
-      }
-
-      lastError = err;
-
-      if (attempt === TRANSIENT_RETRY_DELAYS_SECONDS.length) {
-        break;
-      }
-
-      const delay = applyJitterSeconds(TRANSIENT_RETRY_DELAYS_SECONDS[attempt]);
-      log(`Transient socket error (${err.message}). Retry ${attempt + 1}/${TRANSIENT_RETRY_DELAYS_SECONDS.length} in ${delay} seconds...`);
-      await sleep(delay);
+  try {
+    return await bot.checkAvailableDate(sessionHeaders, currentBookedDate, minDate, maxDate);
+  } catch (err) {
+    if (!isSocketHangupError(err)) {
+      throw err;
     }
+
+    const delay = applyJitterSeconds(TRANSIENT_RETRY_DELAY_SECONDS);
+    log(`Transient socket error (${err.message}). Single retry in ${delay} seconds...`);
+    await sleep(delay);
   }
 
-  log(`Date check socket retries exhausted: ${lastError.message}`);
-  return DATE_CHECK_FAILED;
+  try {
+    return await bot.checkAvailableDate(sessionHeaders, currentBookedDate, minDate, maxDate);
+  } catch (err) {
+    if (!isSocketHangupError(err)) {
+      throw err;
+    }
+
+    log(`Date check socket retry failed: ${err.message}`);
+    return DATE_CHECK_FAILED;
+  }
 }

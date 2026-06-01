@@ -5,11 +5,13 @@ import { log } from './utils.js';
 import { getBaseUri } from './config.js';
 
 const agent = new https.Agent({ keepAlive: false });
+const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 // Common headers
 const COMMON_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Accept-Encoding': 'gzip, deflate, br',
+  'User-Agent': USER_AGENT,
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate',
   'Connection': 'close',
   'Cache-Control': 'no-store'
 };
@@ -46,14 +48,20 @@ export class VisaHttpClient {
   async checkAvailableDate(headers, scheduleId, facilityId) {
     const url = `${this.baseUri}/schedule/${scheduleId}/appointment/days/${facilityId}.json?appointments[expedite]=false`;
     
-    return this._jsonRequest(url, headers)
+    return this._jsonRequest(url, {
+      ...headers,
+      'Referer': this._appointmentUrl(scheduleId)
+    })
       .then(data => data.map(item => item.date));
   }
 
   async checkAvailableTime(headers, scheduleId, facilityId, date) {
     const url = `${this.baseUri}/schedule/${scheduleId}/appointment/times/${facilityId}.json?date=${date}&appointments[expedite]=false`;
     
-    return this._jsonRequest(url, headers)
+    return this._jsonRequest(url, {
+      ...headers,
+      'Referer': this._appointmentUrl(scheduleId)
+    })
       .then(data => data['business_times'][0] || data['available_times'][0]);
   }
 
@@ -84,10 +92,8 @@ export class VisaHttpClient {
     return fetch(url, {
       agent,
       headers: {
-        "User-Agent": "",
-        "Accept": "*/*",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "close",
+        ...COMMON_HEADERS,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         ...headers
       }
     });
@@ -97,9 +103,13 @@ export class VisaHttpClient {
     return fetch(url, {
       agent,
       headers: {
+        ...COMMON_HEADERS,
         ...headers,
-        "Accept": "application/json",
-        "X-Requested-With": "XMLHttpRequest"
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty"
       },
       cache: "no-store"
     })
@@ -112,8 +122,11 @@ export class VisaHttpClient {
       agent,
       method: "POST",
       headers: {
+        ...COMMON_HEADERS,
         ...headers,
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": new URL(this.baseUri).origin
       },
       body: new URLSearchParams(formData)
     });
@@ -125,7 +138,9 @@ export class VisaHttpClient {
       method: "POST",
       redirect: "follow",
       headers: {
+        ...COMMON_HEADERS,
         ...headers,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Content-Type': 'application/x-www-form-urlencoded'
       },
       body: new URLSearchParams(formData)
@@ -139,18 +154,35 @@ export class VisaHttpClient {
     const $ = cheerio.load(html);
     const csrfToken = $('meta[name="csrf-token"]').attr('content');
 
+    if (!csrfToken) {
+      throw new Error(`Missing CSRF token from ${res.url}`);
+    }
+
     return {
       ...COMMON_HEADERS,
       "Cookie": cookies,
       "X-CSRF-Token": csrfToken,
       "Referer": this.baseUri,
+      "Origin": new URL(this.baseUri).origin,
       "Referrer-Policy": "strict-origin-when-cross-origin"
     };
   }
 
   _extractRelevantCookies(res) {
-    const parsedCookies = this._parseCookies(res.headers.get('set-cookie'));
-    return `_yatri_session=${parsedCookies['_yatri_session']}`;
+    const setCookie = res.headers.get('set-cookie');
+
+    if (!setCookie) {
+      throw new Error(`Missing set-cookie header from ${res.url}`);
+    }
+
+    const parsedCookies = this._parseCookies(setCookie);
+    const sessionCookie = parsedCookies['_yatri_session'];
+
+    if (!sessionCookie) {
+      throw new Error(`Missing _yatri_session cookie from ${res.url}`);
+    }
+
+    return `_yatri_session=${sessionCookie}`;
   }
 
   _parseCookies(cookies) {
@@ -172,5 +204,9 @@ export class VisaHttpClient {
     }
 
     return response;
+  }
+
+  _appointmentUrl(scheduleId) {
+    return `${this.baseUri}/schedule/${scheduleId}/appointment`;
   }
 }
