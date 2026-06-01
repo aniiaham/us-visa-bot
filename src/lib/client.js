@@ -1,13 +1,16 @@
 import fetch from "node-fetch";
+import https from 'https';
 import cheerio from 'cheerio';
 import { log } from './utils.js';
 import { getBaseUri } from './config.js';
+
+const agent = new https.Agent({ keepAlive: false });
 
 // Common headers
 const COMMON_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
   'Accept-Encoding': 'gzip, deflate, br',
-  'Connection': 'keep-alive',
+  'Connection': 'close',
   'Cache-Control': 'no-store'
 };
 
@@ -79,11 +82,12 @@ export class VisaHttpClient {
   // Private request methods
   async _anonymousRequest(url, headers = {}) {
     return fetch(url, {
+      agent,
       headers: {
         "User-Agent": "",
         "Accept": "*/*",
         "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
+        "Connection": "close",
         ...headers
       }
     });
@@ -91,6 +95,7 @@ export class VisaHttpClient {
 
   async _jsonRequest(url, headers = {}) {
     return fetch(url, {
+      agent,
       headers: {
         ...headers,
         "Accept": "application/json",
@@ -104,6 +109,7 @@ export class VisaHttpClient {
 
   async _submitForm(url, headers = {}, formData = {}) {
     return fetch(url, {
+      agent,
       method: "POST",
       headers: {
         ...headers,
@@ -115,6 +121,7 @@ export class VisaHttpClient {
 
   async _submitFormWithRedirect(url, headers = {}, formData = {}) {
     return fetch(url, {
+      agent,
       method: "POST",
       redirect: "follow",
       headers: {

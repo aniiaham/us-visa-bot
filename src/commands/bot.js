@@ -4,10 +4,12 @@ import { Notifier } from '../lib/notifier.js';
 import { log, sleep, isSocketHangupError } from '../lib/utils.js';
 
 const BACKOFF_STEPS_SECONDS = [15, 30, 60, 90];
-const TRANSIENT_RETRY_DELAYS_SECONDS = [6, 12, 24];
+const TRANSIENT_RETRY_DELAYS_SECONDS = [3, 7, 15];
+const DATE_CHECK_FAILURE_COOLDOWN_SECONDS = [30, 60, 90];
 const POLL_DELAY_MULTIPLIERS = [1, 2, 3, 4];
 const POLL_STREAK_STEP = 3;
 const JITTER_FACTOR = 0.2;
+const DATE_CHECK_FAILED = Symbol('DATE_CHECK_FAILED');
 
 export async function botCommand(options) {
   const config = getConfig();
@@ -61,6 +63,7 @@ async function _runBot(bot, notifier, config, options, failureCount = 0) {
     const sessionHeaders = await bot.initialize();
     await notifier.notifyStarted(currentBookedDate, targetDate, maxDate, minDate, options.dryRun);
     let noDateStreak = 0;
+    let dateCheckFailureCount = 0;
 
     while (true) {
       const availableDate = await checkAvailableDateWithRetries(
@@ -70,6 +73,17 @@ async function _runBot(bot, notifier, config, options, failureCount = 0) {
         minDate,
         maxDate
       );
+
+      if (availableDate === DATE_CHECK_FAILED) {
+        dateCheckFailureCount += 1;
+        const cooldownSeconds = getDateCheckFailureCooldownSeconds(dateCheckFailureCount);
+        log(`Date check failed after transient retries. Keeping current session and trying again after ${cooldownSeconds} seconds...`);
+        await notifier.notifyError('Date check failed after repeated socket hangups', cooldownSeconds);
+        await sleep(cooldownSeconds);
+        continue;
+      }
+
+      dateCheckFailureCount = 0;
 
       if (availableDate) {
         noDateStreak = 0;
@@ -111,6 +125,11 @@ function getAdaptiveCooldownSeconds(failureCount) {
   return applyJitterSeconds(baseCooldown);
 }
 
+function getDateCheckFailureCooldownSeconds(failureCount) {
+  const index = Math.min(Math.max(failureCount - 1, 0), DATE_CHECK_FAILURE_COOLDOWN_SECONDS.length - 1);
+  return applyJitterSeconds(DATE_CHECK_FAILURE_COOLDOWN_SECONDS[index]);
+}
+
 function getAdaptivePollDelaySeconds(baseRefreshDelay, noDateStreak) {
   const index = Math.min(Math.floor(noDateStreak / POLL_STREAK_STEP), POLL_DELAY_MULTIPLIERS.length - 1);
   const multiplier = POLL_DELAY_MULTIPLIERS[index];
@@ -146,5 +165,6 @@ async function checkAvailableDateWithRetries(bot, sessionHeaders, currentBookedD
     }
   }
 
-  throw lastError;
+  log(`Date check socket retries exhausted: ${lastError.message}`);
+  return DATE_CHECK_FAILED;
 }
