@@ -94,10 +94,6 @@ export class Bot {
       return { booked: true, time };
     }
 
-    // Track before the HTTP call — if the server accepts but the response
-    // throws, the date is already tracked and won't be rebooked on retry
-    this.bookedDates.add(date);
-
     await this.client.book(
       sessionHeaders,
       this.config.scheduleId,
@@ -106,6 +102,7 @@ export class Bot {
       time
     );
 
+    this.bookedDates.add(date);
     log(`booked time at ${date} ${time}`);
     return { booked: true, time };
   }

@@ -84,7 +84,14 @@ export class VisaHttpClient {
       'appointments[asc_appointment][time]': ''
     };
 
-    return this._submitFormWithRedirect(url, bookingHeaders, bookingData);
+    const response = await this._submitFormWithRedirect(url, bookingHeaders, bookingData);
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Booking failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
+    }
+
+    return response;
   }
 
   // Private request methods
