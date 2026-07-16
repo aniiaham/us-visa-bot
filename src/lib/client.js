@@ -55,14 +55,14 @@ export class VisaHttpClient {
       .then(data => data.map(item => item.date));
   }
 
-  async checkAvailableTime(headers, scheduleId, facilityId, date) {
+  async checkAvailableTimes(headers, scheduleId, facilityId, date) {
     const url = `${this.baseUri}/schedule/${scheduleId}/appointment/times/${facilityId}.json?date=${date}&appointments[expedite]=false`;
     
     return this._jsonRequest(url, {
       ...headers,
       'Referer': this._appointmentUrl(scheduleId)
     })
-      .then(data => data['business_times'][0] || data['available_times'][0]);
+      .then(data => data['business_times']?.length > 0 ? data['business_times'] : data['available_times'] || []);
   }
 
   async book(headers, scheduleId, facilityId, date, time) {
@@ -90,6 +90,9 @@ export class VisaHttpClient {
       const body = await response.text();
       throw new Error(`Booking failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
     }
+
+    const body = await response.text();
+    this._handleBookingResponse(body);
 
     return response;
   }
@@ -211,6 +214,26 @@ export class VisaHttpClient {
     }
 
     return response;
+  }
+
+  _handleBookingResponse(html) {
+    const $ = cheerio.load(html);
+    const normalized = $('body').text().toLowerCase();
+    const failureMessages = [
+      'not available',
+      'no longer available',
+      'please try again',
+      'unable to',
+      'invalid',
+      'error',
+      'limit'
+    ];
+
+    const matchedMessage = failureMessages.find(message => normalized.includes(message));
+
+    if (matchedMessage) {
+      throw new Error(`Booking failed; visa site response included "${matchedMessage}"`);
+    }
   }
 
   _appointmentUrl(scheduleId) {

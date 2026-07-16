@@ -76,35 +76,45 @@ export class Bot {
       return null;
     }
 
-    const time = await this.client.checkAvailableTime(
+    const times = await this.client.checkAvailableTimes(
       sessionHeaders,
       this.config.scheduleId,
       this.config.facilityId,
       date
     );
 
-    if (!time) {
+    if (!times || times.length === 0) {
       log(`no available time slots for date ${date}`);
       return null;
     }
 
     if (this.dryRun) {
+      const time = times[0];
       log(`[DRY RUN] Would book appointment at ${date} ${time} (not actually booking)`);
       this.bookedDates.add(date);
       return { booked: true, time };
     }
 
-    await this.client.book(
-      sessionHeaders,
-      this.config.scheduleId,
-      this.config.facilityId,
-      date,
-      time
-    );
+    for (const time of times) {
+      try {
+        await this.client.book(
+          sessionHeaders,
+          this.config.scheduleId,
+          this.config.facilityId,
+          date,
+          time
+        );
 
-    this.bookedDates.add(date);
-    log(`booked time at ${date} ${time}`);
-    return { booked: true, time };
+        this.bookedDates.add(date);
+        log(`booked time at ${date} ${time}`);
+        return { booked: true, time };
+      } catch (err) {
+        log(`failed to book ${date} ${time}: ${err.message}`);
+      }
+    }
+
+    log(`all available time slots failed for date ${date}`);
+    return null;
   }
 
 }
