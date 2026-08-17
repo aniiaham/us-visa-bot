@@ -19,7 +19,7 @@ export function getConfig() {
   return config;
 }
 
-function validateConfig(config) {
+export function validateConfig(config) {
   const required = ['email', 'password', 'scheduleId', 'facilityId', 'countryCode'];
   const missing = required.filter(key => !config[key]);
 
@@ -33,8 +33,11 @@ function validateConfig(config) {
   if (!/^\d+$/.test(config.scheduleId) || !/^\d+$/.test(config.facilityId)) {
     throw configError('SCHEDULE_ID and FACILITY_ID must contain only digits');
   }
-  if (!Number.isFinite(config.refreshDelay) || config.refreshDelay < 10) {
-    throw configError('REFRESH_DELAY must be a number of at least 10 seconds');
+  if (!Number.isFinite(config.refreshDelay) || config.refreshDelay <= 0) {
+    throw configError('REFRESH_DELAY must be a positive number');
+  }
+  if (config.refreshDelay < 10) {
+    console.warn('Warning: REFRESH_DELAY below 10 seconds may trigger rate limiting');
   }
   if (!Number.isFinite(config.requestTimeoutMs) || config.requestTimeoutMs < 1000) {
     throw configError('REQUEST_TIMEOUT_MS must be at least 1000 milliseconds');

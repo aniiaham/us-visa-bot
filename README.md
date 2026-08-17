@@ -26,7 +26,7 @@ Configure `.env`:
 | `COUNTRY_CODE` | Two-letter code from the site URL, such as `ca` |
 | `SCHEDULE_ID` | Numeric schedule ID from the authenticated schedule URL |
 | `FACILITY_ID` | Numeric consulate facility ID |
-| `REFRESH_DELAY` | Poll interval in seconds; minimum 10, default 20 |
+| `REFRESH_DELAY` | Positive poll interval in seconds; default 20. Values below 10 warn about rate-limit risk |
 | `REQUEST_TIMEOUT_MS` | Request timeout in milliseconds; default 15000 |
 | `TELEGRAM_BOT_TOKEN` | Optional Telegram bot token |
 | `TELEGRAM_CHAT_ID` | Optional Telegram chat ID |
