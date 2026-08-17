@@ -6,15 +6,23 @@ export class Bot {
     this.config = config;
     this.dryRun = options.dryRun || false;
     this.bookedDates = new Set();
-    this.client = new VisaHttpClient(this.config.countryCode, this.config.email, this.config.password);
+    this.client = options.client || new VisaHttpClient(
+      this.config.countryCode,
+      this.config.email,
+      this.config.password,
+      { requestTimeoutMs: this.config.requestTimeoutMs }
+    );
   }
 
   async initialize() {
     log('Initializing visa bot...');
-    return await this.client.login();
+    const sessionHeaders = await this.client.login();
+    await this.client.verifyAccountContext(this.config.scheduleId);
+    log('Authenticated schedule verified');
+    return sessionHeaders;
   }
 
-  async checkAvailableDate(sessionHeaders, currentBookedDate, minDate, maxDate) {
+  async checkAvailableDates(sessionHeaders, currentBookedDate, minDate, maxDate) {
     const dates = await this.client.checkAvailableDate(
       sessionHeaders,
       this.config.scheduleId,
@@ -23,51 +31,46 @@ export class Bot {
 
     if (!dates || dates.length === 0) {
       log("no dates available");
-      return null;
+      return [];
     }
 
-    const useRangeMode = !!maxDate;
+    const minKey = minDate ? dateKey(minDate) : null;
+    const maxKey = maxDate ? dateKey(maxDate) : null;
+    const currentKey = currentBookedDate ? dateKey(currentBookedDate) : null;
+    const rejected = { invalid: 0, beforeMin: 0, afterMax: 0, notEarlier: 0 };
+    const goodDates = [];
 
-    const goodDates = dates.filter(date => {
-      // Lower bound: skip dates before minDate
-      if (minDate && date < minDate) {
-        log(`date ${date} is before minimum date (${minDate})`);
-        return false;
+    for (const date of new Set(dates)) {
+      let key;
+      try {
+        key = dateKey(date);
+      } catch {
+        rejected.invalid += 1;
+        continue;
       }
-
-      if (useRangeMode) {
-        // Range mode: accept dates up to maxDate
-        if (date > maxDate) {
-          log(`date ${date} is after maximum date (${maxDate})`);
-          return false;
-        }
-        // Still respect current booking if one exists — don't book a worse date
-        if (currentBookedDate && date >= currentBookedDate) {
-          log(`date ${date} is further than already booked (${currentBookedDate})`);
-          return false;
-        }
-      } else {
-        // Original mode: only accept dates earlier than current booking
-        if (date >= currentBookedDate) {
-          log(`date ${date} is further than already booked (${currentBookedDate})`);
-          return false;
-        }
+      if (minKey !== null && key < minKey) {
+        rejected.beforeMin += 1;
+        continue;
       }
-
-      return true;
-    });
+      if (maxKey !== null && key > maxKey) {
+        rejected.afterMax += 1;
+        continue;
+      }
+      if (currentKey !== null && key >= currentKey) {
+        rejected.notEarlier += 1;
+        continue;
+      }
+      goodDates.push(date);
+    }
 
     if (goodDates.length === 0) {
-      log("no good dates found after filtering");
-      return null;
+      log(`No qualifying dates from ${dates.length} returned; rejected=${JSON.stringify(rejected)}`);
+      return [];
     }
 
-    // Sort dates and return the earliest one
     goodDates.sort();
-    const earliestDate = goodDates[0];
-    
-    log(`found ${goodDates.length} good dates: ${goodDates.join(', ')}, using earliest: ${earliestDate}`);
-    return earliestDate;
+    log(`Found ${goodDates.length} qualifying dates from ${dates.length} returned: ${goodDates.join(', ')}`);
+    return goodDates;
   }
 
   async bookAppointment(sessionHeaders, date) {
@@ -110,6 +113,9 @@ export class Bot {
         return { booked: true, time };
       } catch (err) {
         log(`failed to book ${date} ${time}: ${err.message}`);
+        if (err.code !== 'ESLOT_UNAVAILABLE') {
+          throw err;
+        }
       }
     }
 
@@ -117,4 +123,28 @@ export class Bot {
     return null;
   }
 
+  async bookFirstAvailable(sessionHeaders, dates) {
+    for (const date of dates) {
+      const result = await this.bookAppointment(sessionHeaders, date);
+      if (result) return { ...result, date };
+      log(`No usable times remained for ${date}; checking the next candidate`);
+    }
+    return null;
+  }
+
+}
+
+export function dateKey(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`Invalid date "${value}"; expected YYYY-MM-DD`);
+  }
+
+  const [year, month, day] = value.split('-').map(Number);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const parsed = new Date(timestamp);
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+    throw new Error(`Invalid calendar date "${value}"`);
+  }
+
+  return year * 10000 + month * 100 + day;
 }

@@ -10,6 +10,7 @@ function escapeHtml(text) {
 
 const MAX_RETRIES = 2;
 const MIN_SEND_INTERVAL_MS = 3000; // minimum 3s between messages
+const REQUEST_TIMEOUT_MS = 10000;
 
 export class Notifier {
   constructor(config) {
@@ -43,15 +44,24 @@ export class Notifier {
 
     try {
       const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: this.chatId,
-          text: message,
-          parse_mode: 'HTML'
-        })
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let response;
+
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: this.chatId,
+            text: message,
+            parse_mode: 'HTML'
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       this._lastSendTime = Date.now();
 

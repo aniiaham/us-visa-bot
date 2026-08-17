@@ -1,173 +1,138 @@
-import { Bot } from '../lib/bot.js';
+import { Bot, dateKey } from '../lib/bot.js';
 import { getConfig } from '../lib/config.js';
 import { Notifier } from '../lib/notifier.js';
-import { log, sleep, isSocketHangupError } from '../lib/utils.js';
+import { log, sleep } from '../lib/utils.js';
 
-const BACKOFF_STEPS_SECONDS = [15, 30, 60, 90];
-const TRANSIENT_RETRY_DELAY_SECONDS = 5;
-const DATE_CHECK_FAILURE_COOLDOWN_SECONDS = [12, 30, 60, 90];
-const DATE_CHECK_RELOGIN_AFTER_FAILURES = 8;
-const POLL_DELAY_MULTIPLIERS = [1, 2, 3, 4];
-const POLL_STREAK_STEP = 3;
-const JITTER_FACTOR = 0.2;
-const DATE_CHECK_FAILED = Symbol('DATE_CHECK_FAILED');
+const SESSION_BACKOFF_SECONDS = [15, 30, 60, 90];
+const TRANSIENT_BACKOFF_SECONDS = [5, 10, 20, 30];
+const JITTER_FACTOR = 0.1;
 
-export async function botCommand(options) {
+export async function botCommand(rawOptions) {
+  const options = validateOptions(rawOptions);
   const config = getConfig();
   const bot = new Bot(config, { dryRun: options.dryRun });
   const notifier = new Notifier(config);
 
-  // Validate: need at least --current or --max to define an upper bound
-  if (!options.current && !options.max) {
-    console.error('Error: You must provide either --current or --max (or both).');
-    console.error('  --current <date>  Your existing booked appointment date');
-    console.error('  --max <date>      Maximum acceptable date (upper bound for search range)');
-    process.exit(1);
-  }
+  if (notifier.isEnabled()) log('Telegram notifications enabled');
+  logSearchOptions(options);
+  await notifier.notifyStarted(options.current, options.target, options.max, options.min, options.dryRun);
 
-  if (notifier.isEnabled()) {
-    log('Telegram notifications enabled');
-  }
+  let sessionFailureCount = 0;
 
-  return _runBot(bot, notifier, config, options, 0);
-}
+  while (true) {
+    let sessionHeaders;
+    try {
+      sessionHeaders = await bot.initialize();
+      sessionFailureCount = 0;
+    } catch (error) {
+      if (isPermanentError(error)) throw error;
+      sessionFailureCount += 1;
+      const delay = backoffSeconds(SESSION_BACKOFF_SECONDS, sessionFailureCount);
+      log(`Login/session initialization failed: ${error.message}. Retrying in ${delay}s`);
+      await notifier.notifyError(error.message, delay);
+      await sleep(delay);
+      continue;
+    }
 
-async function _runBot(bot, notifier, config, options, failureCount = 0) {
-  let currentBookedDate = options.current || null;
-  const targetDate = options.target;
-  const minDate = options.min;
-  const maxDate = options.max;
-
-  if (currentBookedDate) {
-    log(`Current booked date: ${currentBookedDate}`);
-  } else {
-    log('No current booking — will book first available date in range');
-  }
-
-  if (maxDate) {
-    log(`Maximum date: ${maxDate}`);
-  }
-
-  if (minDate) {
-    log(`Minimum date: ${minDate}`);
-  }
-
-  if (options.dryRun) {
-    log('[DRY RUN MODE] Bot will only log what would be booked without actually booking');
-  }
-
-  if (targetDate) {
-    log(`Target date: ${targetDate}`);
-  }
-
-  try {
-    const sessionHeaders = await bot.initialize();
-    await notifier.notifyStarted(currentBookedDate, targetDate, maxDate, minDate, options.dryRun);
-    let noDateStreak = 0;
-    let dateCheckFailureCount = 0;
+    let transientFailureCount = 0;
 
     while (true) {
-      const availableDate = await checkAvailableDateWithRetries(
-        bot,
-        sessionHeaders,
-        currentBookedDate,
-        minDate,
-        maxDate
-      );
+      try {
+        const availableDates = await bot.checkAvailableDates(
+          sessionHeaders,
+          options.current,
+          options.min,
+          options.max
+        );
+        transientFailureCount = 0;
 
-      if (availableDate === DATE_CHECK_FAILED) {
-        dateCheckFailureCount += 1;
-
-        if (dateCheckFailureCount >= DATE_CHECK_RELOGIN_AFTER_FAILURES) {
-          throw new Error(`Date checks failed ${dateCheckFailureCount} times; refreshing login session`);
-        }
-
-        const cooldownSeconds = getDateCheckFailureCooldownSeconds(dateCheckFailureCount);
-        log(`Visa site is hanging up. Keeping current session and probing again after ${cooldownSeconds} seconds...`);
-        await sleep(cooldownSeconds);
-        continue;
-      }
-
-      dateCheckFailureCount = 0;
-
-      if (availableDate) {
-        noDateStreak = 0;
-        const result = await bot.bookAppointment(sessionHeaders, availableDate);
-
+        const result = await bot.bookFirstAvailable(sessionHeaders, availableDates);
         if (result) {
-          await notifier.notifyBooked(availableDate, result.time, options.dryRun);
-          log(`Successfully booked appointment on ${availableDate} at ${result.time}`);
-          process.exit(0);
+          await notifier.notifyBooked(result.date, result.time, options.dryRun);
+          log(`Successfully ${options.dryRun ? 'found' : 'booked'} appointment on ${result.date} at ${result.time}`);
+          return;
         }
-      } else {
-        noDateStreak += 1;
+
+        if (options.once) {
+          log('One-time availability check completed with no qualifying bookable slot');
+          return;
+        }
+
+        await sleep(jitterSeconds(config.refreshDelay));
+      } catch (error) {
+        if (error.code === 'EAUTH') {
+          log(`Session expired: ${error.message}. Logging in again`);
+          break;
+        }
+
+        if (error.code === 'ERATELIMIT') {
+          const delay = Math.max(30, Number(error.retryAfterSeconds) || 60);
+          log(`Visa site rate limit reached. Waiting ${delay}s as requested by the server`);
+          await notifier.notifyError(error.message, delay);
+          await sleep(delay);
+          continue;
+        }
+
+        if (error.code === 'ETRANSIENT') {
+          transientFailureCount += 1;
+          const delay = backoffSeconds(TRANSIENT_BACKOFF_SECONDS, transientFailureCount);
+          log(`Transient visa-site failure: ${error.message}. Retrying in ${delay}s`);
+          if (transientFailureCount >= TRANSIENT_BACKOFF_SECONDS.length) break;
+          await sleep(delay);
+          continue;
+        }
+
+        throw error;
       }
-
-      failureCount = 0;
-      const pollDelay = getAdaptivePollDelaySeconds(config.refreshDelay, noDateStreak);
-      await sleep(applyJitterSeconds(pollDelay));
     }
-  } catch (err) {
-    const nextFailureCount = failureCount + 1;
-    const cooldownSeconds = getAdaptiveCooldownSeconds(nextFailureCount);
-
-    if (isSocketHangupError(err)) {
-      log(`Socket hangup error: ${err.message}. Trying again after ${cooldownSeconds} seconds...`);
-      await notifier.notifyError(err.message, cooldownSeconds);
-      await sleep(cooldownSeconds);
-    } else {
-      log(`Session/authentication error: ${err.message}. Trying again after ${cooldownSeconds} seconds...`);
-      await notifier.notifyError(err.message, cooldownSeconds);
-      await sleep(cooldownSeconds);
-    }
-    return _runBot(bot, notifier, config, options, nextFailureCount);
   }
 }
 
-function getAdaptiveCooldownSeconds(failureCount) {
-  const index = Math.min(Math.max(failureCount - 1, 0), BACKOFF_STEPS_SECONDS.length - 1);
-  const baseCooldown = BACKOFF_STEPS_SECONDS[index];
-  return applyJitterSeconds(baseCooldown);
+export function validateOptions(rawOptions = {}) {
+  const options = { ...rawOptions };
+
+  if (options.target && options.max && options.target !== options.max) {
+    throw new Error('--target and --max cannot specify different upper bounds');
+  }
+  if (options.target && !options.max) options.max = options.target;
+  if (!options.current && !options.max) {
+    throw new Error('Provide --current or --max to define an upper date bound');
+  }
+
+  for (const [name, value] of [['current', options.current], ['min', options.min], ['max', options.max]]) {
+    if (value) {
+      try {
+        dateKey(value);
+      } catch (error) {
+        throw new Error(`Invalid --${name}: ${error.message}`);
+      }
+    }
+  }
+
+  if (options.min && options.max && dateKey(options.min) > dateKey(options.max)) {
+    throw new Error('--min must be on or before --max');
+  }
+
+  return options;
 }
 
-function getDateCheckFailureCooldownSeconds(failureCount) {
-  const index = Math.min(Math.max(failureCount - 1, 0), DATE_CHECK_FAILURE_COOLDOWN_SECONDS.length - 1);
-  return applyJitterSeconds(DATE_CHECK_FAILURE_COOLDOWN_SECONDS[index]);
+function logSearchOptions(options) {
+  if (options.current) log(`Current booked date: ${options.current}`);
+  if (options.min) log(`Minimum date: ${options.min}`);
+  if (options.max) log(`Maximum date: ${options.max}`);
+  if (options.dryRun) log('[DRY RUN MODE] No reschedule will be submitted');
 }
 
-function getAdaptivePollDelaySeconds(baseRefreshDelay, noDateStreak) {
-  const index = Math.min(Math.floor(noDateStreak / POLL_STREAK_STEP), POLL_DELAY_MULTIPLIERS.length - 1);
-  const multiplier = POLL_DELAY_MULTIPLIERS[index];
-  return Math.max(1, baseRefreshDelay * multiplier);
+function isPermanentError(error) {
+  return ['ESCHEMA', 'ECONFIG', 'EBOOKING_UNVERIFIED', 'EHTTP'].includes(error?.code);
 }
 
-function applyJitterSeconds(baseSeconds) {
+function backoffSeconds(steps, failureCount) {
+  return jitterSeconds(steps[Math.min(Math.max(failureCount - 1, 0), steps.length - 1)]);
+}
+
+function jitterSeconds(baseSeconds) {
   const min = Math.max(1, baseSeconds * (1 - JITTER_FACTOR));
   const max = baseSeconds * (1 + JITTER_FACTOR);
   return Number((Math.random() * (max - min) + min).toFixed(1));
-}
-
-async function checkAvailableDateWithRetries(bot, sessionHeaders, currentBookedDate, minDate, maxDate) {
-  try {
-    return await bot.checkAvailableDate(sessionHeaders, currentBookedDate, minDate, maxDate);
-  } catch (err) {
-    if (!isSocketHangupError(err)) {
-      throw err;
-    }
-
-    const delay = applyJitterSeconds(TRANSIENT_RETRY_DELAY_SECONDS);
-    log(`Transient socket error (${err.message}). Single retry in ${delay} seconds...`);
-    await sleep(delay);
-  }
-
-  try {
-    return await bot.checkAvailableDate(sessionHeaders, currentBookedDate, minDate, maxDate);
-  } catch (err) {
-    if (!isSocketHangupError(err)) {
-      throw err;
-    }
-
-    log(`Date check socket retry failed: ${err.message}`);
-    return DATE_CHECK_FAILED;
-  }
 }

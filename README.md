@@ -1,141 +1,87 @@
-# US Visa Bot 🤖
+# US Visa Bot
 
-An automated bot that monitors and reschedules US visa interview appointments to get you an earlier date.
+Monitors the official U.S. visa appointment service and reschedules to the earliest qualifying appointment with an available time.
 
-## Features
+Use this project responsibly and in accordance with the appointment service terms. Availability can differ by account, facility, visa category, applicant group, and rescheduling eligibility.
 
-- 🔄 Continuously monitors available appointment slots
-- 📅 Automatically books earlier dates when found  
-- 🎯 Configurable target and minimum date constraints
-- 🚨 Exits successfully after the first booking
-- 📊 Detailed logging with timestamps
-- 🔐 Secure authentication with environment variables
+## Requirements
 
-## How It Works
+- Node.js 20 or newer
+- An existing account on `https://ais.usvisa-info.com/`
+- A valid schedule and facility ID
 
-The bot logs into your account on https://ais.usvisa-info.com/ and checks for available appointment dates every few seconds. When it finds a date earlier than your current booking (and within your specified constraints), it automatically reschedules your appointment.
+## Install
 
-## Prerequisites
-
-- Node.js 16+ 
-- A valid US visa interview appointment
-- Access to https://ais.usvisa-info.com/
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/your-username/us-visa-bot.git
-cd us-visa-bot
-```
-
-2. Install dependencies:
 ```bash
 npm install
+cp .env.example .env
 ```
 
-## Configuration
+Configure `.env`:
 
-Create a `.env` file in the project root with your credentials:
+| Variable | Description |
+| --- | --- |
+| `EMAIL` | Visa-site account email |
+| `PASSWORD` | Visa-site account password |
+| `COUNTRY_CODE` | Two-letter code from the site URL, such as `ca` |
+| `SCHEDULE_ID` | Numeric schedule ID from the authenticated schedule URL |
+| `FACILITY_ID` | Numeric consulate facility ID |
+| `REFRESH_DELAY` | Poll interval in seconds; minimum 10, default 20 |
+| `REQUEST_TIMEOUT_MS` | Request timeout in milliseconds; default 15000 |
+| `TELEGRAM_BOT_TOKEN` | Optional Telegram bot token |
+| `TELEGRAM_CHAT_ID` | Optional Telegram chat ID |
 
-```env
-EMAIL=your.email@example.com
-PASSWORD=your_password
-COUNTRY_CODE=your_country_code
-SCHEDULE_ID=your_schedule_id
-FACILITY_ID=your_facility_id
-REFRESH_DELAY=3
-```
-
-### Finding Your Configuration Values
-
-| Variable | Description | How to Find |
-|----------|-------------|-------------|
-| `EMAIL` | Your login email | Your credentials for ais.usvisa-info.com |
-| `PASSWORD` | Your login password | Your credentials for ais.usvisa-info.com |
-| `COUNTRY_CODE` | Your country code | Found in URL: `https://ais.usvisa-info.com/en-{COUNTRY_CODE}/` <br>Examples: `br` (Brazil), `fr` (France), `de` (Germany) |
-| `SCHEDULE_ID` | Your appointment schedule ID | Found in URL when rescheduling: <br>`https://ais.usvisa-info.com/en-{COUNTRY_CODE}/niv/schedule/{SCHEDULE_ID}/continue_actions` |
-| `FACILITY_ID` | Your consulate facility ID | Found in network calls when selecting dates, or inspect the date selector dropdown <br>Example: Paris = `44` |
-| `REFRESH_DELAY` | Seconds between checks | Optional, defaults to 3 seconds |
+Never commit `.env`. It is ignored by Git.
 
 ## Usage
 
-Run the bot with your current appointment date:
+Search for any date earlier than the current appointment:
 
 ```bash
-node index.js -c <current_date> [-t <target_date>] [-m <min_date>]
+npm start -- --current 2027-04-30
 ```
 
-### Command Line Arguments
-
-| Flag | Long Form | Required | Description |
-|------|-----------|----------|-------------|
-| `-c` | `--current` | ✅ | Your current booked interview date (YYYY-MM-DD) |
-| `-t` | `--target` | ❌ | Preferred target date for notifications/logging |
-| `-m` | `--min` | ❌ | Minimum acceptable date - skips dates before this |
-
-### Examples
+Search only calendar year 2026:
 
 ```bash
-# Basic usage - reschedule to any earlier date
-node index.js -c 2023-06-15
-
-# With target date preference in notifications/logging
-node index.js -c 2023-06-15 -t 2023-06-01
-
-# With minimum date - only accept dates after May 1st
-node index.js -c 2023-06-15 -m 2023-05-01
-
-# With both constraints - only book between May 1st and June 1st
-node index.js -c 2023-06-15 -t 2023-06-01 -m 2023-05-01
-
-# Get help
-node index.js --help
+npm start -- --current 2027-04-30 --min 2026-01-01 --max 2026-12-31
 ```
 
-## How It Behaves
+Verify detection without submitting a reschedule:
 
-The bot will:
-1. **Log in** to your account using provided credentials
-2. **Check** for available dates every few seconds
-3. **Compare** found dates against your constraints:
-   - Must be earlier than current date (`-c`)
-   - Must be after minimum date (`-m`) if specified
-   - Can use target date (`-t`) as a preferred threshold
-4. **Book** the appointment automatically if conditions are met
-5. **Stop** immediately after a successful booking (including `--dry-run`)
-
-## Output Examples
-
-```
-[2023-07-16T10:30:00.000Z] Initializing with current date 2023-08-15
-[2023-07-16T10:30:00.000Z] Target date: 2023-07-01
-[2023-07-16T10:30:00.000Z] Minimum date: 2023-06-01
-[2023-07-16T10:30:01.000Z] Logging in
-[2023-07-16T10:30:03.000Z] nearest date is further than already booked (2023-08-15 vs 2023-09-01)
-[2023-07-16T10:30:06.000Z] booked time at 2023-07-15 09:00
-[2023-07-16T10:30:06.000Z] Target date reached! Successfully booked appointment on 2023-07-15
+```bash
+npm start -- --current 2027-04-30 --min 2026-01-01 --max 2026-12-31 --dry-run
 ```
 
-## Safety Features
+Run one diagnostic poll and exit:
 
-- ✅ **Read-only until booking** - Only books when better dates are found
-- ✅ **Respects constraints** - Won't book outside your specified date range
-- ✅ **Graceful exit** - Stops automatically when target is reached
-- ✅ **Error recovery** - Automatically retries on network errors
-- ✅ **Secure credentials** - Uses environment variables for sensitive data
+```bash
+npm start -- --current 2027-04-30 --min 2026-01-01 --max 2026-12-31 --dry-run --once
+```
 
-## Contributing
+All dates must use strict `YYYY-MM-DD` format. `--target` remains as a deprecated alias for `--max`; do not provide conflicting values.
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+## Behavior
 
-## License
+The bot:
 
-This project is licensed under the ISC License.
+1. Logs in while preserving cookies across redirects.
+2. Verifies that the configured schedule is accessible.
+3. Polls near `REFRESH_DELAY` without progressively slowing ordinary empty checks.
+4. Validates and filters every returned date.
+5. Checks each qualifying date in chronological order, so a stale first date cannot block later dates.
+6. Tries all reported times for a date when a slot race occurs.
+7. Stops after a verified booking or after a dry-run match.
+
+Requests have explicit timeouts. Authentication expiry causes a new login, transient failures use bounded backoff, and HTTP 429 responses honor the server's retry delay.
+
+## Verification
+
+```bash
+npm test
+npm audit --omit=dev
+```
 
 ## Disclaimer
 
-This bot is for educational purposes. Use responsibly and in accordance with the terms of service of the visa appointment system. The authors are not responsible for any misuse or consequences.
+This project is provided for educational use. No software can guarantee that an appointment shown to another account will be available to your account.
